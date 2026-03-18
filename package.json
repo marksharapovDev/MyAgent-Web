@@ -11,10 +11,14 @@
     "dev": "pnpm -r --parallel dev",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "clean": "pnpm -r clean && rm -rf node_modules",
+    "test:api": "tsx scripts/test-api.ts"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   }
 }
