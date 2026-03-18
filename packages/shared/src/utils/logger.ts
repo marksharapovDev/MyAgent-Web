@@ -37,9 +37,9 @@ function log(level: LogLevel, message: string, context?: string, data?: unknown)
   const entry: LogEntry = {
     level,
     message,
-    context,
-    data,
     timestamp: new Date().toISOString(),
+    ...(context !== undefined && { context }),
+    ...(data !== undefined && { data }),
   };
 
   const line = formatEntry(entry);

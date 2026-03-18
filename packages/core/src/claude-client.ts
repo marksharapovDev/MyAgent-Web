@@ -56,20 +56,22 @@ export class ClaudeClient {
       maxTokens,
     });
 
+    // Build params imperatively — exactOptionalPropertyTypes forbids passing
+    // `undefined` to an optional field, so we conditionally assign instead.
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
+      model: modelId,
+      max_tokens: maxTokens,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    };
+    if (options.systemPrompt !== undefined) {
+      params.system = options.systemPrompt;
+    }
+    if (options.temperature !== undefined) {
+      params.temperature = options.temperature;
+    }
+
     const response = await retry(
-      () =>
-        this.client.messages.create({
-          model: modelId,
-          max_tokens: maxTokens,
-          system: options.systemPrompt,
-          messages: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          ...(options.temperature !== undefined && {
-            temperature: options.temperature,
-          }),
-        }),
+      () => this.client.messages.create(params),
       {
         maxAttempts: 3,
         initialDelayMs: 1000,
@@ -108,12 +110,17 @@ export class ClaudeClient {
 
     log.debug('Starting streaming request', { model: modelId });
 
-    const stream = this.client.messages.stream({
+    // MessageStreamParams = MessageCreateParamsBase (same conditional build pattern)
+    const params: Anthropic.Messages.MessageStreamParams = {
       model: modelId,
       max_tokens: options.maxTokens ?? 4096,
-      system: options.systemPrompt,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    });
+    };
+    if (options.systemPrompt !== undefined) {
+      params.system = options.systemPrompt;
+    }
+
+    const stream = this.client.messages.stream(params);
 
     for await (const event of stream) {
       if (
