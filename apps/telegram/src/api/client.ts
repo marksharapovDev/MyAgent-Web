@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import { createLogger } from '@my-agent/shared';
 
 const log = createLogger('api-client');
@@ -25,13 +26,22 @@ export interface ApiPlan {
   phases: unknown[];
 }
 
+function makeServiceToken(secret: string): string {
+  return jwt.sign({ userId: 'telegram-bot' }, secret, { expiresIn: '30d' });
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly token: string;
 
   constructor() {
     this.baseUrl = process.env['SERVER_URL'] ?? 'http://localhost:3001';
-    this.apiKey = process.env['SERVER_API_KEY'] ?? '';
+
+    const secret = process.env['JWT_SECRET'];
+    if (!secret) throw new Error('JWT_SECRET is required');
+
+    this.token = makeServiceToken(secret);
+    log.info('ApiClient initialised', { baseUrl: this.baseUrl });
   }
 
   private async request<T>(
@@ -44,7 +54,7 @@ export class ApiClient {
       method,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.token}`,
       },
     };
     if (body !== undefined) {

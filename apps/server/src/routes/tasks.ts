@@ -13,14 +13,16 @@ taskRoutes.post('/', async (req, res, next) => {
   try {
     const body = CreateTaskInputSchema.parse(req.body);
 
-    const job = await taskQueue.add(body.type, {
+    const jobData: import('../queue/index.js').TaskJobData = {
       projectId: body.projectId,
-      planTaskId: body.planTaskId,
       type: body.type,
       source: body.source ?? 'api',
       userId: req.userId,
       input: body.input,
-    }, {
+    };
+    if (body.planTaskId !== undefined) jobData.planTaskId = body.planTaskId;
+
+    const job = await taskQueue.add(body.type, jobData, {
       priority: body.priority ?? 0,
     });
 
