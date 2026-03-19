@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { createLogger, retry, isRetryableHttpError } from '@my-agent/shared';
 import type { ConversationMessage } from '@my-agent/shared';
 
@@ -7,9 +7,9 @@ const log = createLogger('claude-client');
 export type ModelAlias = 'sonnet' | 'opus' | 'haiku';
 
 const MODEL_IDS: Record<ModelAlias, string> = {
-  sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-6',
-  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'anthropic/claude-sonnet-4',
+  opus: 'anthropic/claude-opus-4',
+  haiku: 'anthropic/claude-haiku-4.5',
 };
 
 export interface ClaudeRequestOptions {
@@ -33,45 +33,48 @@ export interface StreamChunk {
 }
 
 export class ClaudeClient {
-  private readonly client: Anthropic;
+  private readonly client: OpenAI;
 
   constructor(apiKey?: string) {
-    const key = apiKey ?? process.env['ANTHROPIC_API_KEY'];
+    const key = apiKey ?? process.env['POLZA_API_KEY'];
     if (!key) {
-      throw new Error('ANTHROPIC_API_KEY is required');
+      throw new Error('POLZA_API_KEY is required');
     }
-    this.client = new Anthropic({ apiKey: key });
+    const baseURL = process.env['POLZA_BASE_URL'] ?? 'https://polza.ai/api/v1';
+    this.client = new OpenAI({ apiKey: key, baseURL });
   }
 
   async complete(
     messages: ConversationMessage[],
     options: ClaudeRequestOptions = {},
   ): Promise<ClaudeResponse> {
-    const modelId = MODEL_IDS[options.model ?? 'sonnet'];
+    const model = MODEL_IDS[options.model ?? 'sonnet'];
     const maxTokens = options.maxTokens ?? 4096;
 
-    log.debug('Sending request to Claude', {
-      model: modelId,
-      messageCount: messages.length,
-      maxTokens,
-    });
+    log.debug('Sending request', { model, messageCount: messages.length, maxTokens });
 
-    // Build params imperatively — exactOptionalPropertyTypes forbids passing
-    // `undefined` to an optional field, so we conditionally assign instead.
-    const params: Anthropic.MessageCreateParamsNonStreaming = {
-      model: modelId,
-      max_tokens: maxTokens,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    };
+    const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+
     if (options.systemPrompt !== undefined) {
-      params.system = options.systemPrompt;
+      chatMessages.push({ role: 'system', content: options.systemPrompt });
     }
+
+    for (const m of messages) {
+      chatMessages.push({ role: m.role, content: m.content });
+    }
+
+    const params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
+      model,
+      max_tokens: maxTokens,
+      messages: chatMessages,
+    };
+
     if (options.temperature !== undefined) {
       params.temperature = options.temperature;
     }
 
     const response = await retry(
-      () => this.client.messages.create(params),
+      () => this.client.chat.completions.create(params),
       {
         maxAttempts: 3,
         initialDelayMs: 1000,
@@ -79,20 +82,17 @@ export class ClaudeClient {
       },
     );
 
-    const content = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
+    const content = response.choices[0]?.message.content ?? '';
 
     const result: ClaudeResponse = {
       content,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
       model: response.model,
-      stopReason: response.stop_reason ?? 'end_turn',
+      stopReason: response.choices[0]?.finish_reason ?? 'stop',
     };
 
-    log.info('Claude response received', {
+    log.info('Response received', {
       model: result.model,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -106,28 +106,31 @@ export class ClaudeClient {
     messages: ConversationMessage[],
     options: ClaudeRequestOptions = {},
   ): AsyncGenerator<StreamChunk> {
-    const modelId = MODEL_IDS[options.model ?? 'sonnet'];
+    const model = MODEL_IDS[options.model ?? 'sonnet'];
 
-    log.debug('Starting streaming request', { model: modelId });
+    log.debug('Starting streaming request', { model });
 
-    // MessageStreamParams = MessageCreateParamsBase (same conditional build pattern)
-    const params: Anthropic.Messages.MessageStreamParams = {
-      model: modelId,
-      max_tokens: options.maxTokens ?? 4096,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    };
+    const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+
     if (options.systemPrompt !== undefined) {
-      params.system = options.systemPrompt;
+      chatMessages.push({ role: 'system', content: options.systemPrompt });
     }
 
-    const stream = this.client.messages.stream(params);
+    for (const m of messages) {
+      chatMessages.push({ role: m.role, content: m.content });
+    }
 
-    for await (const event of stream) {
-      if (
-        event.type === 'content_block_delta' &&
-        event.delta.type === 'text_delta'
-      ) {
-        yield { delta: event.delta.text, done: false };
+    const stream = await this.client.chat.completions.create({
+      model,
+      max_tokens: options.maxTokens ?? 4096,
+      messages: chatMessages,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta.content;
+      if (delta) {
+        yield { delta, done: false };
       }
     }
 
